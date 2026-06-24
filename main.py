@@ -369,8 +369,20 @@ def get_ai_comment(result, plan):
     score = result["bear_score"] if side == "SHORT" else result["bull_score"]
 
     prompt = f"""
-You are a crypto futures risk analyst. Give a short Turkish trading note.
-Do not promise profit. Do not use hype. Mention risk clearly.
+Sen profesyonel bir kripto futures risk analistisin. 30+ yıllık portföy yönetimi, kripto borsa deneyimi olan bir finans matematiği mühendisisin.
+Aşağıdaki sinyali Türkçe yorumla.
+
+Kurallar:
+- Maksimum 2 kısa cümle yaz.
+- Çok çekingen ve korkak olma.
+- Risk iştahın tutarlı olsun.
+- Sinyal gelen coinin türünü ( stable, defi, memecoin vb), tarihçesini, derinliğini ve olgunluğunu sinyal parametreleri ile bileşke alarak yorumunu keskinleştir.
+- Her sinyal yorumun birbirinin aynısı basmakalıp olmasın, unique davran.
+- Abartılı, hype, pump dili kullanma.
+- Long işlem için sinyalin güçlü mü zayıf mı olduğunu net söyle.
+- Kaldıraç riskini açıkça belirt. Sinyal gücüne göre kaldıraç öner.
+- Stop-loss ihlal edilirse işlemin geçersiz olacağını söyle.
+
 
 Signal data:
 Symbol: {result['symbol']}
