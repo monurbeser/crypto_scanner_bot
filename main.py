@@ -28,6 +28,8 @@ TOP_N = int(os.getenv("TOP_N", "100"))
 
 ENTRY_SCORE = int(os.getenv("ENTRY_SCORE", "7"))
 EXIT_SCORE = int(os.getenv("EXIT_SCORE", "4"))
+ENABLE_SHORTS = os.getenv("ENABLE_SHORTS", "true").lower() == "true"
+SHORT_ENTRY_SCORE = int(os.getenv("SHORT_ENTRY_SCORE", "8"))
 
 MIN_ER = float(os.getenv("MIN_ER", "0.18"))
 MIN_ADX = float(os.getenv("MIN_ADX", "15"))
@@ -257,15 +259,21 @@ def suggest_leverage(atr_pct, bull_score, er_value, z_value):
     return int(base)
 
 
-def build_trade_plan(price, atr_value, atr_pct, bull_score, er_value, z_value):
+def build_trade_plan(price, atr_value, atr_pct, score, er_value, z_value, side="LONG"):
     sl_distance = atr_value * SL_ATR_MULT
-    stop_loss = price - sl_distance
 
-    tp1 = price + sl_distance * TP1_R_MULT
-    tp2 = price + sl_distance * TP2_R_MULT
-    tp3 = price + sl_distance * TP3_R_MULT
+    if side == "LONG":
+        stop_loss = price - sl_distance
+        tp1 = price + sl_distance * TP1_R_MULT
+        tp2 = price + sl_distance * TP2_R_MULT
+        tp3 = price + sl_distance * TP3_R_MULT
+    else:
+        stop_loss = price + sl_distance
+        tp1 = price - sl_distance * TP1_R_MULT
+        tp2 = price - sl_distance * TP2_R_MULT
+        tp3 = price - sl_distance * TP3_R_MULT
 
-    leverage = suggest_leverage(atr_pct, bull_score, er_value, z_value)
+    leverage = suggest_leverage(atr_pct, score, er_value, abs(z_value))
 
     liquidation_buffer_pct = 100 / leverage
     sl_pct = (sl_distance / price) * 100
@@ -276,6 +284,7 @@ def build_trade_plan(price, atr_value, atr_pct, bull_score, er_value, z_value):
     leverage = max(2, min(leverage, MAX_LEVERAGE))
 
     return {
+        "side": side,
         "leverage": leverage,
         "entry": price,
         "stop_loss": stop_loss,
@@ -285,7 +294,6 @@ def build_trade_plan(price, atr_value, atr_pct, bull_score, er_value, z_value):
         "sl_pct": sl_pct,
         "atr_pct": atr_pct,
     }
-
 
 def get_ai_comment(result, plan):
     if not USE_AI_COMMENT or not openai_client:
@@ -379,6 +387,18 @@ def analyze_symbol(symbol):
     bull_score += 1 if adx_val.iloc[last] > MIN_ADX and plus_di.iloc[last] > minus_di.iloc[last] else 0
     bull_score += 1 if er.iloc[last] >= MIN_ER and atr_regime_ok else 0
 
+    bear_score = 0
+bear_score += 1 if price_below_kama else 0
+bear_score += 1 if kama_red else 0
+bear_score += 1 if ema_fast.iloc[last] < ema_slow.iloc[last] else 0
+bear_score += 1 if close.iloc[last] < ema_macro.iloc[last] else 0
+bear_score += 1 if htf_bear else 0
+bear_score += 1 if z.iloc[last] < 0 else 0
+bear_score += 1 if rsi_val.iloc[last] < 50 else 0
+bear_score += 1 if macd_hist.iloc[last] < 0 and macd_hist.iloc[last] < macd_hist.iloc[prev] else 0
+bear_score += 1 if adx_val.iloc[last] > MIN_ADX and minus_di.iloc[last] > plus_di.iloc[last] else 0
+bear_score += 1 if er.iloc[last] >= MIN_ER and atr_regime_ok else 0
+
     strict_buy = (
         bull_score >= ENTRY_SCORE
         and htf_bull
@@ -387,14 +407,27 @@ def analyze_symbol(symbol):
         and price_above_kama
         and kama_green
     )
-
+strict_short = (
+    ENABLE_SHORTS
+    and bear_score >= SHORT_ENTRY_SCORE
+    and htf_bear
+    and er.iloc[last] >= MIN_ER
+    and atr_regime_ok
+    and price_below_kama
+    and kama_red
+)
     sell_ready = (
         bull_score <= EXIT_SCORE
         or price_below_kama
         or kama_red
         or htf_bear
     )
-
+cover_ready = (
+    bear_score <= EXIT_SCORE
+    or price_above_kama
+    or kama_green
+    or htf_bull
+)
     result = {
         "symbol": symbol,
         "price": float(price),
@@ -410,6 +443,10 @@ def analyze_symbol(symbol):
         "kama_green": bool(kama_green),
         "strict_buy": bool(strict_buy),
         "sell_ready": bool(sell_ready),
+        "bear_score": int(bear_score),
+"strict_short": bool(strict_short),
+"cover_ready": bool(cover_ready),
+"side": "SHORT" if strict_short else "LONG",
     }
 
     plan = build_trade_plan(
@@ -427,17 +464,21 @@ def analyze_symbol(symbol):
 
 def format_signal(result, quote_volume):
     symbol = result["symbol"].replace("USDT", "")
-    grade = grade_signal(result["bull_score"])
+    side = result["plan"]["side"]
+    score = result["bear_score"] if side == "SHORT" else result["bull_score"]
+    grade = grade_signal(score)
     volume_m = quote_volume / 1_000_000
     plan = result["plan"]
+
+    icon = "🔴" if side == "SHORT" else "🟢"
 
     ai_comment = get_ai_comment(result, plan)
 
     msg = (
-        f"🟢 <b>{symbol} BUY [{grade}]</b>\n"
+        f"{icon} <b>{symbol} {side} [{grade}]</b>\n"
         f"Price: <b>{result['price']:.6g}</b>\n"
         f"TF: <b>{SCAN_INTERVAL}</b> | HTF: <b>{HTF_INTERVAL}</b>\n"
-        f"Bull: <b>{result['bull_score']}/10</b> | ER: <b>{result['er']:.2f}</b> | Z: <b>{result['z']:.2f}</b>\n"
+        f"Score: <b>{score}/10</b> | ER: <b>{result['er']:.2f}</b> | Z: <b>{result['z']:.2f}</b>\n"
         f"HTF: <b>{'BULL' if result['htf_bull'] else 'BEAR'}</b> | ATR: <b>{'OK' if result['atr_ok'] else 'BAD'}</b> | KAMA: <b>{'GREEN' if result['kama_green'] else 'RED'}</b>\n"
         f"24h Vol: <b>{volume_m:.1f}M USDT</b>\n\n"
         f"⚙️ <b>Futures Plan</b>\n"
@@ -475,21 +516,40 @@ def run_once():
         old_state = state.get(symbol, "FLAT")
 
         if result["strict_buy"] and old_state == "FLAT":
-            messages.append(format_signal(result, quote_volume))
-            state[symbol] = "LONG"
-            state[symbol + "_entry_price"] = result["price"]
-            state[symbol + "_entry_time"] = datetime.now(timezone.utc).isoformat()
-            state[symbol + "_leverage"] = result["plan"]["leverage"]
-            state[symbol + "_sl"] = result["plan"]["stop_loss"]
-            state[symbol + "_tp1"] = result["plan"]["tp1"]
-            state[symbol + "_tp2"] = result["plan"]["tp2"]
-            state[symbol + "_tp3"] = result["plan"]["tp3"]
+    result["plan"]["side"] = "LONG"
+    messages.append(format_signal(result, quote_volume))
+    state[symbol] = "LONG"
+    state[symbol + "_entry_price"] = result["price"]
+    state[symbol + "_entry_time"] = datetime.now(timezone.utc).isoformat()
+    state[symbol + "_side"] = "LONG"
+    state[symbol + "_leverage"] = result["plan"]["leverage"]
+    state[symbol + "_sl"] = result["plan"]["stop_loss"]
+    state[symbol + "_tp1"] = result["plan"]["tp1"]
+    state[symbol + "_tp2"] = result["plan"]["tp2"]
+    state[symbol + "_tp3"] = result["plan"]["tp3"]
 
-        elif old_state == "LONG" and result["sell_ready"]:
-            state[symbol] = "FLAT"
-            for key in ["_entry_price", "_entry_time", "_leverage", "_sl", "_tp1", "_tp2", "_tp3"]:
-                state.pop(symbol + key, None)
+elif result["strict_short"] and old_state == "FLAT":
+    result["plan"]["side"] = "SHORT"
+    messages.append(format_signal(result, quote_volume))
+    state[symbol] = "SHORT"
+    state[symbol + "_entry_price"] = result["price"]
+    state[symbol + "_entry_time"] = datetime.now(timezone.utc).isoformat()
+    state[symbol + "_side"] = "SHORT"
+    state[symbol + "_leverage"] = result["plan"]["leverage"]
+    state[symbol + "_sl"] = result["plan"]["stop_loss"]
+    state[symbol + "_tp1"] = result["plan"]["tp1"]
+    state[symbol + "_tp2"] = result["plan"]["tp2"]
+    state[symbol + "_tp3"] = result["plan"]["tp3"]
 
+elif old_state == "LONG" and result["sell_ready"]:
+    state[symbol] = "FLAT"
+    for key in ["_entry_price", "_entry_time", "_side", "_leverage", "_sl", "_tp1", "_tp2", "_tp3"]:
+        state.pop(symbol + key, None)
+
+elif old_state == "SHORT" and result["cover_ready"]:
+    state[symbol] = "FLAT"
+    for key in ["_entry_price", "_entry_time", "_side", "_leverage", "_sl", "_tp1", "_tp2", "_tp3"]:
+        state.pop(symbol + key, None)
         print(
             symbol,
             "state:", state.get(symbol, "FLAT"),
