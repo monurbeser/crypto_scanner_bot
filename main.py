@@ -32,6 +32,14 @@ EXIT_SCORE = int(os.getenv("EXIT_SCORE", "4"))
 MIN_ER = float(os.getenv("MIN_ER", "0.18"))
 MIN_ADX = float(os.getenv("MIN_ADX", "15"))
 MIN_24H_QUOTE_VOLUME = float(os.getenv("MIN_24H_QUOTE_VOLUME", "10000000"))
+EXCLUDED_BASE_ASSETS = set(
+    x.strip().upper()
+    for x in os.getenv(
+        "EXCLUDED_BASE_ASSETS",
+        "USDC,FDUSD,TUSD,USDP,BUSD,DAI,USD1,UUSD,USDE,USDS,PYUSD,EUR,TRY,BRL,AEUR"
+    ).split(",")
+    if x.strip()
+)
 
 KLINE_LIMIT = int(os.getenv("KLINE_LIMIT", "250"))
 SLEEP_SECONDS = int(os.getenv("SLEEP_SECONDS", "300"))
@@ -84,18 +92,34 @@ def get_top_symbols():
     data = requests.get(url, timeout=30).json()
 
     rows = []
+
     for item in data:
         symbol = item.get("symbol", "")
+
+        # Sadece USDT pariteleri
         if not symbol.endswith("USDT"):
             continue
+
+        # Base asset: BTCUSDT -> BTC, USD1USDT -> USD1
+        base_asset = symbol.replace("USDT", "")
+
+        # Stablecoin / fiat / anlamsız pariteleri hariç tut
+        if base_asset in EXCLUDED_BASE_ASSETS:
+            continue
+
+        # Binance leveraged token / eski token tiplerini hariç tut
         if any(x in symbol for x in ["UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT"]):
             continue
 
         quote_volume = float(item.get("quoteVolume", 0))
+
         if quote_volume < MIN_24H_QUOTE_VOLUME:
             continue
 
-        rows.append({"symbol": symbol, "quoteVolume": quote_volume})
+        rows.append({
+            "symbol": symbol,
+            "quoteVolume": quote_volume
+        })
 
     rows = sorted(rows, key=lambda x: x["quoteVolume"], reverse=True)
     return rows[:TOP_N]
