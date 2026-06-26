@@ -1,0 +1,12 @@
+.env
+bot.log
+signals_state.json
+paper_state.json
+paper_trades.json
+
+__pycache__/
+.venv/
+*.pyc
+
+*.log
+.DS_Store
