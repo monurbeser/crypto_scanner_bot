@@ -17,6 +17,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from trade_engine import place_futures_market_order, close_futures_market_position
+from paper_trader import open_paper_trade, close_paper_trade
 
 try:
     from openai import OpenAI
@@ -677,14 +678,46 @@ def run_once():
         if old_state == "FLAT" and result["strict_buy"]:
             result["plan"]["side"] = "LONG"
             trade_note, order_ok, order_result = execute_open_order(symbol, "LONG", result)
-            messages.append(format_signal(result, quote_volume) + "\n\n" + trade_note)
+
+            paper_note = ""
+            if order_ok:
+                paper_result = open_paper_trade(
+                    symbol,
+                    "LONG",
+                    result,
+                    order_result=order_result,
+                    order_note=trade_note,
+                )
+                paper_note = (
+                    "\n\n🧪 <b>Paper Portfolio</b>: "
+                    + ("OPEN OK" if paper_result.get("ok") else "OPEN SKIPPED")
+                    + f" - {escape(str(paper_result.get('msg')))}"
+                )
+
+            messages.append(format_signal(result, quote_volume) + "\n\n" + trade_note + paper_note)
             if order_ok:
                 set_symbol_state(state, symbol, result, order_result)
 
         elif old_state == "FLAT" and result["strict_short"]:
             result["plan"]["side"] = "SHORT"
             trade_note, order_ok, order_result = execute_open_order(symbol, "SHORT", result)
-            messages.append(format_signal(result, quote_volume) + "\n\n" + trade_note)
+
+            paper_note = ""
+            if order_ok:
+                paper_result = open_paper_trade(
+                    symbol,
+                    "SHORT",
+                    result,
+                    order_result=order_result,
+                    order_note=trade_note,
+                )
+                paper_note = (
+                    "\n\n🧪 <b>Paper Portfolio</b>: "
+                    + ("OPEN OK" if paper_result.get("ok") else "OPEN SKIPPED")
+                    + f" - {escape(str(paper_result.get('msg')))}"
+                )
+
+            messages.append(format_signal(result, quote_volume) + "\n\n" + trade_note + paper_note)
             if order_ok:
                 set_symbol_state(state, symbol, result, order_result)
 
@@ -692,9 +725,23 @@ def run_once():
             reason = exit_reason_for_position(symbol, old_state, result, state)
             if reason:
                 close_note, close_ok, close_result = execute_close_order(symbol, old_state, state)
+
+                paper_close = close_paper_trade(
+                    symbol,
+                    result["price"],
+                    reason=reason,
+                    close_order_result=close_result,
+                )
+                paper_close_note = (
+                    "\n\n🧪 <b>Paper Portfolio</b>: "
+                    + ("CLOSE OK" if paper_close.get("ok") else "CLOSE SKIPPED")
+                    + f" - {escape(str(paper_close.get('msg')))}"
+                )
+
                 if SEND_EXIT_ALERTS:
-                    messages.append(format_exit_message(symbol, old_state, reason, result, close_note))
-                if close_ok:
+                    messages.append(format_exit_message(symbol, old_state, reason, result, close_note + paper_close_note))
+
+                if close_ok or BINANCE_ORDER_MODE == "TEST":
                     clear_symbol_state(state, symbol)
 
         print(
